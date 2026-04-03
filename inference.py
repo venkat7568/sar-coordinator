@@ -38,7 +38,7 @@ _load_dotenv()
 # ── Config ────────────────────────────────────────────────────────────────────
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
-ENV_BASE_URL = os.getenv("ENV_BASE_URL",  "http://localhost:8000")
+ENV_BASE_URL = os.getenv("ENV_BASE_URL",  "https://venkat7568-sar-coordinator.hf.space")
 
 # Accept both HF_TOKEN (hackathon standard) and TOKEN (our .env variable)
 HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("TOKEN", "")
@@ -89,10 +89,10 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     )
 
 
-def log_end(success: bool, steps: int, rewards: list) -> None:
+def log_end(success: bool, steps: int, score: float, rewards: list) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.4f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -476,7 +476,7 @@ def run_task(task_id: int) -> tuple:
     except Exception as exc:
         print(f"[ERR] Task {task_id} failed: {exc}", file=sys.stderr)
 
-    log_end(success=success, steps=steps_taken, rewards=rewards)
+    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     if RICH:
         c = "green" if success else "red"
