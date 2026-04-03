@@ -1,3 +1,12 @@
+---
+title: SAR Coordinator Environment
+emoji: 🚁
+colorFrom: red
+colorTo: blue
+sdk: docker
+pinned: false
+---
+
 # SAR Coordinator Environment
 
 **A Search & Rescue operational RL environment built on the OpenEnv spec.**
