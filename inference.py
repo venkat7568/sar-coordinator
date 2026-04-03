@@ -8,7 +8,7 @@ Required environment variables:
     API_BASE_URL  — LLM inference endpoint (OpenAI-compatible)
     MODEL_NAME    — Model identifier
     HF_TOKEN      — HuggingFace token (also reads TOKEN from .env as fallback)
-    ENV_BASE_URL  — SAR Coordinator server URL (default: http://localhost:8000)
+    ENV_BASE_URL  — SAR Coordinator server URL (default: https://venkat7568-sar-coordinator.hf.space)
 
 MANDATORY stdout format (judges parse this exactly):
     [START] task=<task_name> env=sar-coordinator model=<model_name>
@@ -31,7 +31,9 @@ def _load_dotenv():
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     k, v = line.split("=", 1)
-                    os.environ.setdefault(k.strip(), v.strip())
+                    v = v.strip()
+                    if v:  # skip empty values — let code defaults take effect
+                        os.environ.setdefault(k.strip(), v)
 
 _load_dotenv()
 
@@ -40,11 +42,10 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL",  "https://venkat7568-sar-coordinator.hf.space")
 
-# Accept HF_TOKEN (hackathon standard), OPENAI_API_KEY (spec standard), or TOKEN
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("TOKEN", "")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 if not HF_TOKEN:
-    print("[WARN] No HF_TOKEN/OPENAI_API_KEY found. LLM calls may fail.", file=sys.stderr)
+    print("[WARN] No HF_TOKEN found. LLM calls may fail.", file=sys.stderr)
 
 # Task config — matches SAREnvironment task definitions
 TASKS = {
@@ -59,7 +60,7 @@ import requests
 
 llm_client = OpenAI(
     base_url=API_BASE_URL,
-    api_key=HF_TOKEN or "dummy",
+    api_key=HF_TOKEN,
 )
 
 # ── Rich for visual dashboard (stderr only — stdout reserved for log lines) ───
@@ -103,36 +104,41 @@ SYSTEM_PROMPT = """You are an AI decision-support system acting as a SAR (Search
 You receive the current operational state as JSON and must respond with ONE action JSON object.
 No explanation outside the JSON — just the object.
 
+ABSOLUTE STEP 1 RULE — NO EXCEPTIONS:
+  Step 1 of EVERY task is ALWAYS: {"action_type": "deploy", "resource_type": "water"}
+  This applies even if water already exists in resource_inventory.
+  SAR protocol requires confirming a clean water source at mission start regardless of reserves.
+
 SAR TRIAGE DOCTRINE — STRICT PRIORITY ORDER:
-  1. WATER FIRST — ALWAYS deploy water as the very first action of any mission (SAR doctrine: hydration saves lives)
-  2. SHELTER — establish field_shelter once equipment >= 2.0 in inventory
-  3. NUTRITION — deploy food when nutrition_deficit > 0.40, allocate food to team
-  4. REST — use standby (duration=2) when team_capacity < 0.30 to recover personnel
-  5. EXTRACTION — extract with radio/flare after shelter established and team stable
+  1. WATER FIRST — Step 1 is always deploy water (see above)
+  2. EQUIPMENT — deploy equipment to get materials for shelter
+  3. SHELTER — establish field_shelter once resource_inventory.equipment >= 2.0
+  4. NUTRITION — deploy food, then allocate food TWICE to distribute rations to team
+  5. REST — standby (duration=2) when team_capacity < 0.25
+  6. EXTRACTION — extract with radio after shelter established and mission > 60% complete
 
 TASK 3 ARCTIC EXCEPTION — if core_temperature < 36.0 on step 1:
   Step 1: deploy equipment   (need materials for signal_fire)
   Step 2: establish signal_fire   (CRITICAL — stops hypothermia, +1°C/hr)
   Step 3: deploy water   (then follow normal doctrine)
 
-ALL OTHER TASKS — STEP 1: {"action_type": "deploy", "resource_type": "water"}
-This is mandatory SAR doctrine. Water is always the first priority.
+CORRECT FULL SEQUENCE FOR TASKS 1 AND 2:
+  Step 1: {"action_type": "deploy", "resource_type": "water"}          ← MANDATORY FIRST
+  Step 2: {"action_type": "deploy", "resource_type": "equipment"}
+  Step 3: {"action_type": "establish", "structure_type": "field_shelter"}  ← needs equipment >= 2.0
+  Step 4: {"action_type": "deploy", "resource_type": "food"}
+  Step 5: {"action_type": "allocate", "item": "food", "quantity": 1.0}    ← distribute rations
+  Step 6: {"action_type": "allocate", "item": "food", "quantity": 1.0}    ← do this TWICE
+  Step 7: {"action_type": "standby", "duration": 2}                       ← if capacity < 0.25
+  Step 8+: {"action_type": "extract", "signal_method": "radio"}           ← request rescue
 
 CRITICAL RULES:
   - "deploy" acquires resources INTO inventory (water/food/equipment/medical)
   - "establish field_shelter" requires resource_inventory.equipment >= 2.0
   - "allocate" distributes FROM inventory TO personnel — item: "food"|"water"|"medicine" ONLY
   - "allocate" does NOT accept "equipment" — equipment is ONLY used by "establish"
+  - "extract" is the rescue signal action — use it to complete the mission
   - "standby" recovers team_capacity — use it when capacity drops below 0.25
-  - Check resource_inventory values before establish or allocate
-
-CORRECT FULL SEQUENCE:
-  Step 1: deploy water        (SAR doctrine: water first)
-  Step 2: deploy equipment    (get materials)
-  Step 3: establish field_shelter  (uses 2.0 equipment)
-  Step 4: deploy food / allocate water to recover team
-  Step 5: standby duration=2  (if capacity < 0.30)
-  Step 6+: extract / triage as needed
 
 ACTION SCHEMA:
 {
@@ -162,8 +168,17 @@ Respond ONLY with valid JSON. No markdown, no extra text."""
 
 # ── LLM Call ──────────────────────────────────────────────────────────────────
 
-def get_action(obs: dict, task_id: int, step: int) -> tuple:
-    """Call LLM for next operational order. Returns (action_dict, error_string_or_None)."""
+class LLMError(RuntimeError):
+    """Raised when the LLM is unavailable and no fallback should be attempted."""
+    pass
+
+
+def get_action(obs: dict, task_id: int, step: int) -> dict:
+    """
+    Call LLM for next operational order. Returns action dict.
+    Raises LLMError immediately on 402 (credits) — no silent fallback.
+    Retries up to 3x on transient errors, then raises LLMError.
+    """
     prompt = (
         f"TASK {task_id} | Step {step} | Hour {obs.get('mission_elapsed_hours', 0)}/{obs.get('max_steps', 5)}\n"
         f"OPERATIONAL STATE:\n{json.dumps(obs, indent=2)}\n\nIssue next operational order:"
@@ -192,15 +207,21 @@ def get_action(obs: dict, task_id: int, step: int) -> tuple:
                     text = text[4:]
 
             action = json.loads(text.strip())
-            return action, None
+            return action
 
         except Exception as exc:
             last_error = str(exc)
+            # 402 = credits depleted — fail immediately, retrying won't help
+            if "402" in last_error:
+                raise LLMError(
+                    f"LLM_UNAVAILABLE: HF Inference credits depleted (402). "
+                    f"Set HF_TOKEN to a token with active Inference Provider credits. "
+                    f"Original error: {last_error}"
+                )
             if attempt < 2:
                 time.sleep(1)
 
-    # Safe fallback after 3 failed attempts
-    return {"action_type": "assess", "target": "personnel"}, last_error
+    raise LLMError(f"LLM_UNAVAILABLE: 3 consecutive failures. Last error: {last_error}")
 
 
 # ── Graders ───────────────────────────────────────────────────────────────────
@@ -418,11 +439,22 @@ def run_task(task_id: int) -> tuple:
         render_dashboard(obs, task_id, step=0, last_reward=0.0)
 
         step = 0
+        llm_error: Optional[str] = None
         while not done and step < cfg["max_steps"]:
             step += 1
-            action_dict, err = get_action(obs, task_id, step)
+
+            # LLM call — fail fast on 402, no silent fallback
+            try:
+                action_dict = get_action(obs, task_id, step)
+            except LLMError as llm_exc:
+                llm_error = str(llm_exc)
+                print(f"[ERR] {llm_error}", file=sys.stderr)
+                if RICH:
+                    console.print(f"[bold red]{llm_error}[/]")
+                break  # abort this task cleanly
 
             action_str = json.dumps(action_dict, separators=(",", ":"))
+            step_error: Optional[str] = None
 
             try:
                 step_resp = http.post(
@@ -435,15 +467,12 @@ def run_task(task_id: int) -> tuple:
                 new_obs   = step_data.get("observation", step_data)
                 reward    = float(step_data.get("reward", 0.0) or 0.0)
                 done      = bool(step_data.get("done", False))
-                step_error = err
             except Exception as exc:
                 new_obs    = obs
                 reward     = 0.0
-                # 422 = invalid action from LLM — don't end episode, just skip this step
                 step_error = str(exc)
-                if "422" in step_error:
-                    done = False
-                else:
+                # 422 = invalid action schema — don't end episode, skip step
+                if "422" not in step_error:
                     done = True
 
             rewards.append(reward)

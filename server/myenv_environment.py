@@ -705,9 +705,9 @@ class SAREnvironment(Environment):
 
         # 3. Base camp and signal fire (0.15)
         camp_score = 0.0
-        if w["base_camp_status"] == "established": camp_score = 0.05
-        elif w["base_camp_status"] == "fortified": camp_score = 0.10
-        if w["signal_fire_active"]: camp_score += 0.05
+        if w["base_camp_status"] == "established": camp_score = 0.50
+        elif w["base_camp_status"] == "fortified": camp_score = 0.85
+        if w["signal_fire_active"]: camp_score = min(1.0, camp_score + 0.25)
         r += 0.15 * camp_score
 
         # 4. Extraction signal quality × timing (0.15)
