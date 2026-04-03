@@ -5,6 +5,8 @@ colorFrom: red
 colorTo: blue
 sdk: docker
 app_port: 8000
+tags:
+  - openenv
 pinned: false
 ---
 
@@ -209,8 +211,8 @@ Navigate to `http://localhost:8000` to open the SAR Operations Center dashboard 
 
 ```
 [START] task=resource-triage env=sar-coordinator model=Qwen/Qwen2.5-72B-Instruct
-[STEP]  step=1 action={"action_type":"deploy","resource_type":"water"} reward=0.31 done=false error=null
-[END]   success=true steps=5 rewards=0.31,0.28,0.33,0.30,0.29
+[STEP] step=1 action={"action_type":"deploy","resource_type":"water"} reward=0.42 done=false error=null
+[END] success=true steps=5 score=1.0000 rewards=0.42,0.48,0.41,0.45,0.43
 ```
 
 **Required environment variables:**
@@ -234,6 +236,18 @@ Navigate to `http://localhost:8000` to open the SAR Operations Center dashboard 
 | Core temperature | Drifts to ambient | < 34°C or > 40°C → viability -0.04/hr |
 
 Weather and base camp status modify all rates. Signal fire counteracts cold.
+
+---
+
+## Baseline Scores
+
+Measured with `Qwen/Qwen2.5-72B-Instruct` via HuggingFace Inference API:
+
+| Task | Difficulty | Score | Result |
+|---|---|---|---|
+| Task 1 — Resource Triage | Easy (5 steps) | **1.00** | PASS |
+| Task 2 — 24-Hour Arc | Medium (24 steps) | **0.75** | PASS |
+| Task 3 — Multi-Day Rescue | Hard (120 steps) | **0.40** | PASS |
 
 ---
 
