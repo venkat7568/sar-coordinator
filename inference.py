@@ -42,10 +42,10 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL",  "https://venkat7568-sar-coordinator.hf.space")
 
-HF_TOKEN = os.getenv("HF_TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 
 if not HF_TOKEN:
-    print("[WARN] No HF_TOKEN found. LLM calls may fail.", file=sys.stderr)
+    print("[WARN] No HF_TOKEN or API_KEY found. LLM calls may fail.", file=sys.stderr)
 
 # Task config — matches SAREnvironment task definitions
 TASKS = {
