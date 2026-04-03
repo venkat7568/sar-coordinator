@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+./__init__.py
+./client.py
+./inference.py
+./models.py
+openenv_myenv.egg-info/PKG-INFO
+openenv_myenv.egg-info/SOURCES.txt
+openenv_myenv.egg-info/dependency_links.txt
+openenv_myenv.egg-info/entry_points.txt
+openenv_myenv.egg-info/requires.txt
+openenv_myenv.egg-info/top_level.txt
+server/__init__.py
+server/app.py
+server/myenv_environment.py
