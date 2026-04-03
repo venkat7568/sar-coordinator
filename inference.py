@@ -40,11 +40,11 @@ API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME   = os.getenv("MODEL_NAME",   "Qwen/Qwen2.5-72B-Instruct")
 ENV_BASE_URL = os.getenv("ENV_BASE_URL",  "https://venkat7568-sar-coordinator.hf.space")
 
-# Accept both HF_TOKEN (hackathon standard) and TOKEN (our .env variable)
-HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("TOKEN", "")
+# Accept HF_TOKEN (hackathon standard), OPENAI_API_KEY (spec standard), or TOKEN
+HF_TOKEN = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY") or os.getenv("TOKEN", "")
 
 if not HF_TOKEN:
-    print("[WARN] No HF_TOKEN or TOKEN found. LLM calls may fail.", file=sys.stderr)
+    print("[WARN] No HF_TOKEN/OPENAI_API_KEY found. LLM calls may fail.", file=sys.stderr)
 
 # Task config — matches SAREnvironment task definitions
 TASKS = {
