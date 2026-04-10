@@ -141,10 +141,10 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
     )
 
 
-def log_end(success: bool, steps: int, rewards: list) -> None:
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+def log_end(success: bool, steps: int, score: float, rewards: list) -> None:
+    rewards_str = ",".join(f"{r:.4f}" for r in rewards)
     print(
-        f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}",
+        f"[END] success={str(success).lower()} steps={steps} score={score:.4f} rewards={rewards_str}",
         flush=True,
     )
 
@@ -650,11 +650,11 @@ def run_task(task_id: int) -> tuple:
                 step_resp.raise_for_status()
                 step_data = step_resp.json()
                 new_obs   = step_data.get("observation", step_data)
-                reward    = float(step_data.get("reward", 0.0) or 0.0)
+                reward    = _clamp(float(step_data.get("reward", 0.0) or 0.0))
                 done      = bool(step_data.get("done", False))
             except Exception as exc:
                 new_obs    = obs
-                reward     = 0.0
+                reward     = 0.001
                 step_error = str(exc)
                 # 422 = invalid action schema — don't end episode, skip step
                 if "422" not in step_error:
@@ -690,7 +690,7 @@ def run_task(task_id: int) -> tuple:
     except Exception as exc:
         print(f"[ERR] Task {task_id} failed: {exc}", file=sys.stderr)
 
-    log_end(success=success, steps=steps_taken, rewards=rewards)
+    log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
 
     if RICH:
         c = "green" if success else "red"
