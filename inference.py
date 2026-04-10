@@ -75,17 +75,20 @@ FALLBACK_SEQUENCES = {
         {"action_type": "extract",   "signal_method": "radio"},
     ],
     3: [  # Multi-Day Rescue — signal_fire + shelter first (3.0 equipment provided at start)
-        {"action_type": "establish", "structure_type": "signal_fire"},
-        {"action_type": "establish", "structure_type": "field_shelter"},
+        {"action_type": "establish", "structure_type": "signal_fire"},   # step 1
+        {"action_type": "establish", "structure_type": "field_shelter"}, # step 2
+        # Survival cycle (steps 3-118): water/food every 2-3 steps to prevent dehydration
         {"action_type": "deploy",    "resource_type": "water"},
-        {"action_type": "deploy",    "resource_type": "food"},
-        {"action_type": "allocate",  "item": "food", "quantity": 1.0},
         {"action_type": "allocate",  "item": "water", "quantity": 1.0},
-        {"action_type": "allocate",  "item": "food", "quantity": 1.0},
-        {"action_type": "triage",    "condition": "trauma"},
+        {"action_type": "deploy",    "resource_type": "food"},
+        {"action_type": "allocate",  "item": "food",  "quantity": 1.0},
+        {"action_type": "allocate",  "item": "water", "quantity": 1.0},
+        {"action_type": "allocate",  "item": "food",  "quantity": 1.0},
         {"action_type": "deploy",    "resource_type": "water"},
-        {"action_type": "standby",   "duration": 2},
-        {"action_type": "extract",   "signal_method": "radio"},
+        {"action_type": "allocate",  "item": "water", "quantity": 1.0},
+        {"action_type": "triage",    "condition": "trauma"},
+        {"action_type": "allocate",  "item": "water", "quantity": 1.0},
+        {"action_type": "extract",   "signal_method": "radio"},          # step 119+
     ],
 }
 
