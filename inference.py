@@ -153,11 +153,20 @@ def log_end(success: bool, steps: int, rewards: list) -> None:
     )
 
 
+# ── Batch planning chunk sizes ────────────────────────────────────────────────
+# Task 1: 1 LLM call for all 5 steps
+# Task 2: 3 calls of 8 steps each
+# Task 3: 6 calls of 20 steps each  (was 120 individual calls)
+CHUNK_SIZES = {1: 5, 2: 8, 3: 20}
+
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
 SYSTEM_PROMPT = """You are an AI decision-support system acting as a SAR (Search & Rescue) field coordinator.
-You receive the current operational state as JSON and must respond with ONE action JSON object.
-No explanation outside the JSON — just the object.
+You receive the current operational state as JSON and must respond with a JSON ARRAY of sequential actions.
+Return ONLY the JSON array — no explanation, no markdown, no extra text.
+
+BATCH PLANNING: When asked to plan N sequential actions, respond with a JSON ARRAY of N action objects.
+Example 3-action response: [{"action_type":"deploy","resource_type":"water"},{"action_type":"establish","structure_type":"field_shelter"},{"action_type":"extract","signal_method":"radio"}]
 
 TASK-SPECIFIC STEP 1 RULES:
   TASKS 1 & 2: Step 1 is ALWAYS {"action_type": "deploy", "resource_type": "water"}
@@ -184,7 +193,8 @@ TASK 3 ARCTIC — resource_inventory starts with equipment: 3.0, water: 1.0, med
   Step 4: deploy food
   Step 5: allocate food
   Step 6: allocate food
-  Ongoing: deploy water/food as needed, triage trauma at hour 24, extract after hour 48
+  Ongoing: deploy water/food as needed, triage trauma at hour 24, extract ONLY after hour 48
+  CRITICAL: Do NOT use extract before hour 48 in Task 3 — it ends the mission early!
 
 CORRECT FULL SEQUENCE FOR TASKS 1 AND 2:
   Step 1: {"action_type": "deploy", "resource_type": "water"}          ← MANDATORY FIRST
@@ -230,22 +240,57 @@ KEY FIELD MEANINGS:
 Respond ONLY with valid JSON. No markdown, no extra text."""
 
 
-# ── LLM Call ──────────────────────────────────────────────────────────────────
+# ── LLM Calls ─────────────────────────────────────────────────────────────────
 
 class LLMError(RuntimeError):
     """Raised when the LLM is unavailable and no fallback should be attempted."""
     pass
 
 
-def get_action(obs: dict, task_id: int, step: int) -> dict:
+VALID_ACTION_TYPES = {"deploy", "establish", "relocate", "standby", "triage", "extract", "allocate", "assess"}
+
+
+def _parse_action_list(text: str) -> list:
+    """Parse LLM response into a list of action dicts. Handles arrays and single objects."""
+    # Strip markdown fences
+    if "```" in text:
+        parts = text.split("```")
+        text = parts[1] if len(parts) > 1 else parts[0]
+        if text.startswith("json"):
+            text = text[4:]
+    text = text.strip()
+
+    parsed = json.loads(text)
+    if isinstance(parsed, list):
+        return [a for a in parsed if isinstance(a, dict) and a.get("action_type") in VALID_ACTION_TYPES]
+    if isinstance(parsed, dict) and parsed.get("action_type") in VALID_ACTION_TYPES:
+        return [parsed]
+    return []
+
+
+def get_action_plan(obs: dict, task_id: int, step: int, n: int) -> list:
     """
-    Call LLM for next operational order. Returns action dict.
-    Raises LLMError immediately on 402 (credits) — no silent fallback.
-    Retries up to 3x on transient errors, then raises LLMError.
+    Request N sequential actions from the LLM in a single call.
+    Returns a list of up to N action dicts.
+    Raises LLMError on 402 or 3 consecutive failures.
     """
+    max_hr = obs.get("max_steps", 5)
+    elapsed = obs.get("mission_elapsed_hours", 0)
+
+    # Task 3 guard: tell LLM exactly when extract is allowed
+    extract_note = ""
+    if task_id == 3:
+        extract_note = (
+            f"\nWARNING: Do NOT include extract until hour 48+ "
+            f"(currently hour {elapsed}). Plan {n} survival actions only if hour < 48."
+        )
+
     prompt = (
-        f"TASK {task_id} | Step {step} | Hour {obs.get('mission_elapsed_hours', 0)}/{obs.get('max_steps', 5)}\n"
-        f"OPERATIONAL STATE:\n{json.dumps(obs, indent=2)}\n\nIssue next operational order:"
+        f"TASK {task_id} | Step {step} | Hour {elapsed}/{max_hr}\n"
+        f"CURRENT STATE:\n{json.dumps(obs, indent=2)}\n\n"
+        f"Plan the NEXT {n} sequential actions starting from step {step}."
+        f"{extract_note}\n"
+        f"Return ONLY a JSON array of {n} action objects. No explanation."
     )
 
     last_error = None
@@ -257,35 +302,27 @@ def get_action(obs: dict, task_id: int, step: int) -> dict:
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user",   "content": prompt},
                 ],
-                temperature=0.3,
-                max_tokens=300,
+                temperature=0.2,
+                max_tokens=max(300, n * 60 + 50),
                 stream=False,
             )
             text = (response.choices[0].message.content or "").strip()
-
-            # Strip markdown fences if model adds them
-            if "```" in text:
-                parts = text.split("```")
-                text = parts[1] if len(parts) > 1 else parts[0]
-                if text.startswith("json"):
-                    text = text[4:]
-
-            action = json.loads(text.strip())
-            return action
+            actions = _parse_action_list(text)
+            if actions:
+                return actions[:n]
+            raise ValueError(f"LLM returned empty or invalid action list: {text[:200]}")
 
         except Exception as exc:
             last_error = str(exc)
-            # 402 = credits depleted — fail immediately, retrying won't help
             if "402" in last_error:
                 raise LLMError(
                     f"LLM_UNAVAILABLE: HF Inference credits depleted (402). "
-                    f"Set HF_TOKEN to a token with active Inference Provider credits. "
-                    f"Original error: {last_error}"
+                    f"Set HF_TOKEN with active credits. Error: {last_error}"
                 )
             if attempt < 2:
                 time.sleep(1)
 
-    raise LLMError(f"LLM_UNAVAILABLE: 3 consecutive failures. Last error: {last_error}")
+    raise LLMError(f"LLM_UNAVAILABLE: 3 consecutive failures. Last: {last_error}")
 
 
 # ── Graders ───────────────────────────────────────────────────────────────────
@@ -509,16 +546,35 @@ def run_task(task_id: int) -> tuple:
 
         step = 0
         llm_error: Optional[str] = None
+        action_queue: list = []
+        chunk_size = CHUNK_SIZES.get(task_id, 5)
+
         while not done and step < cfg["max_steps"]:
             step += 1
 
-            # LLM call — use heuristic fallback if LLM unavailable
-            try:
-                action_dict = get_action(obs, task_id, step)
-            except LLMError as llm_exc:
-                llm_error = str(llm_exc)
-                print(f"[WARN] LLM unavailable, using fallback: {llm_error}", file=sys.stderr)
-                action_dict = get_fallback_action(step, task_id)
+            # Refill action queue with a batch LLM call when empty
+            if not action_queue:
+                remaining = cfg["max_steps"] - step + 1
+                n = min(chunk_size, remaining)
+                try:
+                    action_queue = get_action_plan(obs, task_id, step, n)
+                    print(
+                        f"[INFO] LLM planned {len(action_queue)} actions "
+                        f"(step {step}–{step + len(action_queue) - 1})",
+                        file=sys.stderr,
+                    )
+                except LLMError as llm_exc:
+                    llm_error = str(llm_exc)
+                    print(f"[WARN] LLM unavailable (step {step}), using fallback: {llm_error}", file=sys.stderr)
+                    action_queue = [get_fallback_action(step + i, task_id) for i in range(n)]
+
+            action_dict = action_queue.pop(0) if action_queue else get_fallback_action(step, task_id)
+
+            # Task 3 safety: never extract before hour 48 (would end mission early → low score)
+            if task_id == 3 and action_dict.get("action_type") == "extract":
+                elapsed_hrs = obs.get("mission_elapsed_hours", 0)
+                if elapsed_hrs < 48:
+                    action_dict = get_fallback_action(step, task_id)
 
             action_str = json.dumps(action_dict, separators=(",", ":"))
             step_error: Optional[str] = None
