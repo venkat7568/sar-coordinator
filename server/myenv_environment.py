@@ -825,6 +825,7 @@ class SAREnvironment(Environment):
             task_id=w["task_id"],
             max_steps=w["max_steps"],
             active_incidents=incidents,
+            trauma_active=w.get("trauma_active", False),
             done=False,
             reward=None,
         )

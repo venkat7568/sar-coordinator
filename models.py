@@ -165,3 +165,5 @@ class SARObservation(Observation):
     max_steps:        int       = Field(default=5,  description="Maximum steps for this task")
     active_incidents: list[str] = Field(default_factory=list,
         description="Active field incidents this step (e.g. trauma, storm_onset)")
+    trauma_active:    bool      = Field(default=False,
+        description="Whether an untreated trauma injury is active (causes -0.02/hr viability drain)")
