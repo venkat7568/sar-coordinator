@@ -156,8 +156,8 @@ def log_end(success: bool, steps: int, rewards: list) -> None:
 # ── Batch planning chunk sizes ────────────────────────────────────────────────
 # Task 1: 1 LLM call for all 5 steps
 # Task 2: 3 calls of 8 steps each
-# Task 3: 6 calls of 20 steps each  (was 120 individual calls)
-CHUNK_SIZES = {1: 5, 2: 8, 3: 20}
+# Task 3: 20 calls of 6 steps each — shorter window so LLM sees updated dehydration/viability
+CHUNK_SIZES = {1: 5, 2: 8, 3: 6}
 
 # ── System Prompt ─────────────────────────────────────────────────────────────
 
@@ -248,6 +248,31 @@ class LLMError(RuntimeError):
 
 
 VALID_ACTION_TYPES = {"deploy", "establish", "relocate", "standby", "triage", "extract", "allocate", "assess"}
+
+# Resources that should be allocated to personnel after deploying
+_ALLOCATABLE = {"water", "food"}
+
+
+def _inject_allocations(actions: list) -> list:
+    """
+    After every deploy of water/food, insert an allocate if the next action isn't already one.
+    Prevents the LLM from stacking deploys without distributing resources to personnel.
+    """
+    result = []
+    for i, action in enumerate(actions):
+        result.append(action)
+        if action.get("action_type") == "deploy":
+            rt = action.get("resource_type")
+            if rt in _ALLOCATABLE:
+                # Only inject if next action isn't already an allocate of the same item
+                next_action = actions[i + 1] if i + 1 < len(actions) else {}
+                already_allocates = (
+                    next_action.get("action_type") == "allocate"
+                    and next_action.get("item") == rt
+                )
+                if not already_allocates:
+                    result.append({"action_type": "allocate", "item": rt, "quantity": 1.0})
+    return result
 
 
 def _parse_action_list(text: str) -> list:
@@ -557,7 +582,11 @@ def run_task(task_id: int) -> tuple:
                 remaining = cfg["max_steps"] - step + 1
                 n = min(chunk_size, remaining)
                 try:
-                    action_queue = get_action_plan(obs, task_id, step, n)
+                    planned = get_action_plan(obs, task_id, step, n)
+                    # Task 3: inject allocate after every deploy so inventory is actually distributed
+                    if task_id == 3:
+                        planned = _inject_allocations(planned)
+                    action_queue = planned
                     print(
                         f"[INFO] LLM planned {len(action_queue)} actions "
                         f"(step {step}–{step + len(action_queue) - 1})",
