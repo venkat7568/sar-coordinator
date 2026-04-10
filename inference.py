@@ -253,6 +253,30 @@ VALID_ACTION_TYPES = {"deploy", "establish", "relocate", "standby", "triage", "e
 _ALLOCATABLE = {"water", "food"}
 
 
+def _emergency_overrides(obs: dict) -> list:
+    """
+    Return high-priority actions to prepend to the queue when the observation
+    shows critical conditions the LLM batch plan may have missed.
+    These run BEFORE the next planned action.
+
+    Conditions checked:
+      - Trauma active + medical available  → triage trauma  (-0.02/hr if untreated)
+      - Hydration deficit >= 0.75 + water available → allocate water immediately
+    """
+    overrides = []
+    inv = obs.get("resource_inventory", {})
+
+    # Treat active trauma — causes -0.02/hr mission viability damage while untreated
+    if obs.get("trauma_active") and inv.get("medical", 0) >= 0.5:
+        overrides.append({"action_type": "triage", "condition": "trauma"})
+
+    # Distribute water when critically dehydrated and water is sitting in inventory
+    if obs.get("hydration_deficit", 0) >= 0.75 and inv.get("water", 0) >= 0.5:
+        overrides.append({"action_type": "allocate", "item": "water", "quantity": 1.0})
+
+    return overrides
+
+
 def _inject_allocations(actions: list) -> list:
     """
     After every deploy of water/food, insert an allocate if the next action isn't already one.
@@ -576,6 +600,12 @@ def run_task(task_id: int) -> tuple:
 
         while not done and step < cfg["max_steps"]:
             step += 1
+
+            # Emergency overrides: prepend critical actions if observation demands it
+            for override in reversed(_emergency_overrides(obs)):
+                # Only prepend if this action isn't already at the front (avoid duplicate)
+                if not action_queue or action_queue[0].get("action_type") != override.get("action_type"):
+                    action_queue.insert(0, override)
 
             # Refill action queue with a batch LLM call when empty
             if not action_queue:
