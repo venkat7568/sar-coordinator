@@ -77,17 +77,13 @@ FALLBACK_SEQUENCES = {
     3: [  # Multi-Day Rescue — signal_fire + shelter first (3.0 equipment provided at start)
         {"action_type": "establish", "structure_type": "signal_fire"},   # step 1
         {"action_type": "establish", "structure_type": "field_shelter"}, # step 2
-        # Survival cycle (steps 3-118): water/food every 2-3 steps to prevent dehydration
+        # Survival cycle (steps 3-118): strict 4-item rotate — 50% food, 50% water
+        # Each 4-step cycle: nutrition -0.09 net, hydration -0.06 net → both decrease
+        # Triage removed — emergency_overrides() handles trauma instantly from obs
         {"action_type": "deploy",    "resource_type": "water"},
         {"action_type": "allocate",  "item": "water", "quantity": 1.0},
         {"action_type": "deploy",    "resource_type": "food"},
         {"action_type": "allocate",  "item": "food",  "quantity": 1.0},
-        {"action_type": "allocate",  "item": "water", "quantity": 1.0},
-        {"action_type": "allocate",  "item": "food",  "quantity": 1.0},
-        {"action_type": "deploy",    "resource_type": "water"},
-        {"action_type": "allocate",  "item": "water", "quantity": 1.0},
-        {"action_type": "triage",    "condition": "trauma"},
-        {"action_type": "allocate",  "item": "water", "quantity": 1.0},
         {"action_type": "extract",   "signal_method": "radio"},          # step 119+
     ],
 }
@@ -273,6 +269,13 @@ def _emergency_overrides(obs: dict) -> list:
     # Distribute water when critically dehydrated and water is sitting in inventory
     if obs.get("hydration_deficit", 0) >= 0.75 and inv.get("water", 0) >= 0.5:
         overrides.append({"action_type": "allocate", "item": "water", "quantity": 1.0})
+
+    # Distribute food when critically malnourished — deploy if nothing in inventory
+    if obs.get("nutrition_deficit", 0) >= 0.80:
+        if inv.get("food", 0) >= 0.5:
+            overrides.append({"action_type": "allocate", "item": "food", "quantity": 1.0})
+        else:
+            overrides.append({"action_type": "deploy", "resource_type": "food"})
 
     return overrides
 
@@ -603,8 +606,8 @@ def run_task(task_id: int) -> tuple:
 
             # Emergency overrides: prepend critical actions if observation demands it
             for override in reversed(_emergency_overrides(obs)):
-                # Only prepend if this action isn't already at the front (avoid duplicate)
-                if not action_queue or action_queue[0].get("action_type") != override.get("action_type"):
+                # Only prepend if this exact action isn't already at the front (dict equality)
+                if not action_queue or action_queue[0] != override:
                     action_queue.insert(0, override)
 
             # Refill action queue with a batch LLM call when empty
