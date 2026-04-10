@@ -515,7 +515,7 @@ def render_dashboard(obs: dict, task_id: int, step: int, last_reward: float):
     weather    = obs.get("weather_conditions", "clear")
     inv        = obs.get("resource_inventory", {})
     elapsed    = obs.get("mission_elapsed_hours", 0)
-    max_steps  = obs.get("max_steps", 5)
+    max_steps  = TASKS.get(task_id, {}).get("max_steps", obs.get("max_steps", 5))
     sitrep     = obs.get("sitrep", "")
     incidents  = obs.get("active_incidents", [])
 
